@@ -1,0 +1,229 @@
+<#
+.SYNOPSIS
+    XIANCODE Desync (No Key Auth)
+#>
+
+function Run-Cleaner {
+    Write-Host "`n[CLEANER] Wiping Execution History..." -ForegroundColor Magenta
+    Clear-History
+    try {
+        if (Get-Module -ListAvailable PSReadline) {
+            $HistoryPath = (Get-PSReadlineOption).HistorySavePath
+            if (Test-Path $HistoryPath) { 
+                Remove-Item $HistoryPath -Force -ErrorAction SilentlyContinue
+                Write-Host "   -> PowerShell History Deleted" -ForegroundColor Green
+            }
+        }
+    } catch {}
+    try {
+        Remove-Item "$env:APPDATA\Microsoft\Windows\Recent\*" -Force -Recurse -ErrorAction SilentlyContinue
+        Write-Host "   -> Recent Files Cleared" -ForegroundColor Green
+    } catch {}
+    Write-Host "[CLEANER] Tracks Removed. Exiting..." -ForegroundColor Magenta
+    Start-Sleep -Seconds 2
+}
+
+function Run-Optimization {
+    Write-Host "`nStarting FiveM True All-In-One Optimization..." -ForegroundColor Cyan
+
+    # [USER CONFIGURATION] (Reverted to Stable)
+    $BANDWIDTH_LIMIT = 1800
+    $MTU_SIZE = 1400
+    $CPU_CORE_MASK = 3
+
+    # [1/10] SYSTEM CLEANUP & POWER
+    Write-Host "[1/10] Cleaning System & Setting Power..." -ForegroundColor Yellow
+    Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue 2>$null
+    Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue 2>$null
+    Remove-Item -Path "C:\Windows\Prefetch\*" -Recurse -Force -ErrorAction SilentlyContinue 2>$null
+
+    powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
+    powercfg -setactive e9a42b02-d5df-448d-aa00-03f14749eb61
+    if ($LASTEXITCODE -ne 0) { powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c }
+
+    # [2/10] STABILITY
+    Write-Host "[2/10] Disabling GameDVR & Throttling..." -ForegroundColor Yellow
+    $GameConfigStore = "HKCU:\System\GameConfigStore"
+    if (-not (Test-Path $GameConfigStore)) { New-Item -Path $GameConfigStore -Force | Out-Null }
+    New-ItemProperty -Path $GameConfigStore -Name "GameDVR_Enabled" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    New-ItemProperty -Path $GameConfigStore -Name "GameDVR_FSEBehaviorMode" -Value 2 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    $GameDVRPolicy = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR"
+    if (-not (Test-Path $GameDVRPolicy)) { New-Item -Path $GameDVRPolicy -Force | Out-Null }
+    New-ItemProperty -Path $GameDVRPolicy -Name "AllowGameDVR" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    $MultimediaParams = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+    New-ItemProperty -Path $MultimediaParams -Name "NetworkThrottlingIndex" -Value 0xffffffff -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    New-ItemProperty -Path $MultimediaParams -Name "SystemResponsiveness" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # [3/10] NETWORK
+    Write-Host "[3/10] Tuning Network (TCP/IP & MTU)..." -ForegroundColor Yellow
+    $TcpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters"
+    New-ItemProperty -Path $TcpParams -Name "DisableTaskOffload" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    New-ItemProperty -Path $TcpParams -Name "TcpAckFrequency" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    New-ItemProperty -Path $TcpParams -Name "TcpNoDelay" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    netsh int tcp set global autotuninglevel=normal 2>$null
+    netsh int tcp set global timestamps=disabled 2>$null
+    Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object { netsh interface ipv4 set subinterface $_.InterfaceAlias mtu=$MTU_SIZE store=persistent 2>$null }
+    
+    $QoSFiveM = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\QoS\FiveM"
+    if (-not (Test-Path $QoSFiveM)) { New-Item -Path $QoSFiveM -Force | Out-Null }
+    New-ItemProperty -Path $QoSFiveM -Name "ThrottleRate" -Value $BANDWIDTH_LIMIT -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    New-ItemProperty -Path $QoSFiveM -Name "Protocol" -Value "*" -PropertyType String -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # [4/10] DNS & BITS
+    Write-Host "[4/10] Optimizing DNS & Background Services..." -ForegroundColor Yellow
+    $DNSClient = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient"
+    if (-not (Test-Path $DNSClient)) { New-Item -Path $DNSClient -Force | Out-Null }
+    New-ItemProperty -Path $DNSClient -Name "EnableMulticast" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # [5/10] INPUT LAG
+    Write-Host "[5/10] Reducing Input Lag..." -ForegroundColor Yellow
+    $MousePath = "HKCU:\Control Panel\Mouse"
+    New-ItemProperty -Path $MousePath -Name "MouseSpeed" -Value "0" -PropertyType String -Force -ErrorAction SilentlyContinue | Out-Null
+    cmd /c "bcdedit /set useplatformtick yes" | Out-Null
+    cmd /c "bcdedit /set disabledynamictick yes" | Out-Null
+
+    # [6/10] PRIORITY (Fixed: Relaxed for Overlay)
+    Write-Host "[6/10] Setting High Priority (Games & Multimedia)..." -ForegroundColor Yellow
+    $GamesProfile = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games"
+    New-ItemProperty -Path $GamesProfile -Name "GPU Priority" -Value 8 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    New-ItemProperty -Path $GamesProfile -Name "Priority" -Value 6 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    # Scheduling Category & SFIO Priority Removed to fix Alt+Z freeze
+
+    # [7/10] NVIDIA
+    Write-Host "[7/10] Applying NVIDIA Tweaks..." -ForegroundColor Yellow
+    $NvidiaKeyPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    $NvidiaAdapters = Get-ItemProperty -Path "$NvidiaKeyPath\*" -ErrorAction SilentlyContinue | Where-Object { ($_.ProviderName -like "*NVIDIA*") -or ($_.DriverDesc -like "*NVIDIA*") }
+    if ($NvidiaAdapters) {
+        foreach ($adapter in $NvidiaAdapters) {
+            $path = $adapter.PSPath
+            New-ItemProperty -Path $path -Name "D3PCLatency" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $path -Name "LOWLATENCY" -Value 1 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $path -Name "PciLatencyTimerControl" -Value 20 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
+
+    # [8/10] GENERATE LUA
+    Write-Host "[8/10] Generating FiveM Client Boost Script (Lua)..." -ForegroundColor Yellow
+    $LuaContent = @"
+-- ======================================================
+-- XIAN FiveM INPUT / NETWORK FEELING OPTIMIZER (ADV)
+-- ======================================================
+local ENABLE = true
+Citizen.CreateThread(function()
+    while true do
+        if ENABLE then
+            Citizen.Wait(0)
+            DisableControlAction(0, 1, true)
+            DisableControlAction(0, 2, true)
+            EnableControlAction(0, 1, true)
+            EnableControlAction(0, 2, true)
+            DisableControlAction(0, 24, false)
+            DisableControlAction(0, 25, false)
+        else
+            Citizen.Wait(100)
+        end
+    end
+end)
+Citizen.CreateThread(function()
+    while true do
+        Citizen.Wait(1)
+        local ped = PlayerPedId()
+        if IsPedOnFoot(ped) then
+            SetPedMoveRateOverride(ped, 1.10)
+            SetPedCanPlayAmbientAnims(ped, false)
+            SetPedCanPlayAmbientBaseAnims(ped, false)
+        end
+    end
+end)
+Citizen.CreateThread(function()
+    while true do
+        Citizen.Wait(0)
+        local ped = PlayerPedId()
+        local netId = NetworkGetNetworkIdFromEntity(ped)
+        NetworkRequestControlOfEntity(ped)
+        SetNetworkIdCanMigrate(netId, false)
+    end
+end)
+Citizen.CreateThread(function()
+    while true do
+        Citizen.Wait(0)
+        if IsControlJustPressed(0, 140) then ClearPedTasksImmediately(PlayerPedId()) end
+        if IsControlJustPressed(0, 24) then DisablePlayerFiring(PlayerPedId(), false) end
+    end
+end)
+"@
+    Set-Content -Path "$env:USERPROFILE\Desktop\fivem_lua_boost.lua" -Value $LuaContent
+    Write-Host "   -> Created 'fivem_lua_boost.lua' (ADVANCED)" -ForegroundColor Green
+
+    # [9/10] USB & VISUALS
+    Write-Host "[9/10] Tuning USB Power & Visual FX..." -ForegroundColor Yellow
+    powercfg /SETACVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2beb146f860 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 2>$null
+    powercfg /SETDCVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2beb146f860 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 2>$null
+    powercfg /setactive SCHEME_CURRENT 2>$null
+    $ExplorerObj = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+    if (-not (Test-Path $ExplorerObj)) { New-Item -Path $ExplorerObj -Force | Out-Null }
+    New-ItemProperty -Path $ExplorerObj -Name "VisualFXSetting" -Value 2 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # [10/10] LIVE AFFINITY
+    Write-Host "[10/10] Checking processes..." -ForegroundColor Yellow
+    Get-Process -Name "FiveM*" -ErrorAction SilentlyContinue | ForEach-Object { $_.ProcessorAffinity = $CPU_CORE_MASK }
+
+    # [11/11] FPS BOOSTER (HAGS & PRIORITY)
+    Write-Host "[11/11] Pushing FPS Limits (GPU & Priority)..." -ForegroundColor Yellow
+    # Win32PrioritySeparation (Default 2 to prevent Overlay Freeze)
+    $PriorityKey = "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl"
+    New-ItemProperty -Path $PriorityKey -Name "Win32PrioritySeparation" -Value 2 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+    # Hardware Accelerated GPU Scheduling (On)
+    $Graphics = "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
+    New-ItemProperty -Path $Graphics -Name "HwSchMode" -Value 2 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+
+    # [12/12] DEBLOAT & TELEMETRY
+    Write-Host "[12/12] Disabling Telemetry & Unnecessary Services..." -ForegroundColor Yellow
+    $Services = @("DiagTrack", "dmwappushservice", "SysMain", "MapsBroker", "PcaSvc", "Downloaded Maps Manager", "Touch Keyboard and Handwriting Panel Service")
+    foreach ($srv in $Services) { 
+        Stop-Service -Name $srv -Force -ErrorAction SilentlyContinue
+        Set-Service -Name $srv -StartupType Disabled -Status Stopped -ErrorAction SilentlyContinue 
+    }
+    $DataColl = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
+    if (-not (Test-Path $DataColl)) { New-Item $DataColl -Force | Out-Null }
+    New-ItemProperty $DataColl -Name "AllowTelemetry" -Value 0 -PropertyType DWORD -Force -ErrorAction SilentlyContinue | Out-Null
+
+    Write-Host "`n[COMPLETE] ALL OPTIMIZATIONS APPLIED." -ForegroundColor Green
+    Write-Host "PLEASE RESTART YOUR PC NOW!" -ForegroundColor Green
+}
+
+# MAIN EXECUTION
+Clear-Host
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host "     Setting X9 (FREE)     " -ForegroundColor Cyan
+Write-Host "     Discord: https://discord.gg/TAQzSxRzH6" -ForegroundColor Green
+Write-Host "=========================================" -ForegroundColor Cyan
+
+while ($true) {
+    Write-Host ""
+    Write-Host "  [1] START OPTIMIZATION (Run Scripts 1-12)" -ForegroundColor Yellow
+    Write-Host "  [0] EXIT & CLEAR LOGS (Clean History)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "=========================================" -ForegroundColor Cyan
+    
+    $sel = Read-Host " Select Option"
+    
+    if ($sel -eq "1") {
+        Run-Optimization
+        Write-Host ""
+        Read-Host " Press Enter to Return to Menu..."
+        Clear-Host
+        Write-Host "=========================================" -ForegroundColor Cyan
+        Write-Host "     XIANCODE DESYNC PRODUCT (FREE)     " -ForegroundColor Cyan
+        Write-Host "     Discord: https://discord.gg/xiancode" -ForegroundColor Green
+        Write-Host "=========================================" -ForegroundColor Cyan
+    }
+    elseif ($sel -eq "0") {
+        Run-Cleaner
+        exit
+    }
+    else {
+        Write-Host " Invalid Selection." -ForegroundColor Red
+        Start-Sleep -Seconds 1
+    }
+}
